@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Calculadora visual de fracciones</title>
+  <title>Operaciones combinadas con fracciones — paso a paso</title>
   <style>
     :root{
       --bg:#eef3f8; --panel:#fbfdff; --text:#1f2937; --accent:#0e7fb0; --accent-2:#0ea5e9; --muted:#6b7280;
@@ -126,13 +126,43 @@
     @media (prefers-reduced-motion: reduce){
       *{animation:none !important;transition:none !important}
     }
+
+    /* ---- desarrollo lineal (estilo pizarra) ---- */
+    #deriv-wrap{grid-column:1 / -1;display:flex;flex-direction:column;gap:14px;
+      background:rgba(0,0,0,0.02);padding:18px;border-radius:16px;min-width:0}
+    body.dark #deriv-wrap{background:rgba(255,255,255,0.04)}
+    #deriv-wrap h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0}
+    #steps{max-height:none;overflow-x:auto;overflow-y:visible;
+      background:var(--bg);box-shadow:var(--inset-shadow);border-radius:14px;padding:20px 22px}
+    /* flujo continuo: las expresiones y los "=" se escriben seguidos, alineados a la
+       izquierda; las notas (m.c.m.) cuelgan DEBAJO de su expresión sin romper el flujo */
+    .deriv{font-size:21px;line-height:3.3;text-align:left;color:var(--text)}
+    .deriv .step{position:relative;display:inline-flex;align-items:center;vertical-align:middle}
+    .deriv .expr{display:inline-flex;align-items:center;gap:1px;white-space:nowrap}
+    .deriv .eq{color:var(--muted);font-weight:700;margin:0 .5em;vertical-align:middle}
+    .deriv .expr.final{font-weight:700;background:rgba(14,127,176,.10);outline:2px solid var(--accent);
+      outline-offset:2px;border-radius:8px;padding:2px 10px}
+    body.dark .deriv .expr.final{background:rgba(56,189,248,.12)}
+    .deriv .note{position:absolute;top:100%;left:3px;margin-top:2px;font-size:.55em;color:var(--muted);
+      font-style:italic;white-space:nowrap;line-height:1.2}
+    .deriv .mono{font-family:var(--mono-font);white-space:normal}
+    .deriv .muted{color:var(--muted)}
+    .expr .op{margin:0 7px;color:var(--accent);font-weight:600}
+    .expr .lead{margin-right:1px;color:var(--text)}
+    .expr .par{font-size:1.45em;color:var(--muted);align-self:center;margin:0 1px}
+    .expr .int{font-weight:600}
+    .expr .neg{align-self:center;margin-right:1px}
+    .expr .exp{font-size:.62em;font-weight:700;align-self:flex-start;margin-top:-.2em}
+    .fr{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle;margin:0 1px}
+    .fr .n,.fr .d{padding:0 7px;line-height:1.12}
+    .fr .b{height:2px;background:currentColor;width:100%;margin:1px 0;border-radius:1px}
   </style>
 </head>
 <body>
   <div class="app">
     <header class="head">
-      <h1>Calculadora visual de fracciones</h1>
-      <span class="sub">suma · resta · producto · cociente · potencia · m.c.m. · simplificación</span>
+      <h1>Operaciones combinadas con fracciones</h1>
+      <span class="sub">desarrollo lineal paso a paso · jerarquía · m.c.m. · simplificación</span>
     </header>
 
     <div id="main-calc">
@@ -182,9 +212,12 @@
     <aside id="sidebar">
       <h2>Resultado</h2>
       <div id="result"><div class="result-placeholder">—</div></div>
-      <h2>Pasos del cálculo</h2>
-      <div id="steps"><div class="step"><div class="s-body muted">Construye una operación y pulsa Resolver.</div></div></div>
     </aside>
+
+    <section id="deriv-wrap">
+      <h2>Desarrollo paso a paso</h2>
+      <div id="steps"><div class="deriv"><span class="expr muted">Construye una operación y pulsa Resolver.</span></div></div>
+    </section>
   </div>
   <div id="announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
 
@@ -196,9 +229,12 @@ function lcm(a,b){if(a===0||b===0)return 0;return Math.abs(a/gcd(a,b)*b);}
 function normalize(n,d){if(d===0)throw new Error('El denominador no puede ser 0.');if(d<0){n=-n;d=-d;}const g=gcd(n,d)||1;return{n:Math.trunc(n/g),d:Math.trunc(d/g)};}
 function fmt(f){return f.d===1?`${f.n}`:`${f.n}/${f.d}`;}
 function rawFmt(n,d){return d===1?`${n}`:`${n}/${d}`;}
-/* potencia entera exacta (mantiene enteros, sin Math.pow) */
-function ipow(base,exp){let r=1;for(let i=0;i<exp;i++){r*=base;if(!Number.isSafeInteger(r))throw new Error('El resultado es demasiado grande para calcularlo con exactitud.');}return r;}
-function powTerm(x,k){return (x<0?`(${x})`:`${x}`)+`^${k}`;}
+/* ===================== MOTOR: AST + REDUCCIÓN LINEAL ===================== */
+function isLowest(f){ if(f.t!=='f')return false; if(f.d<=0)return false; return gcd(f.n,f.d)===1; }
+function needSimp(f){ return f.t==='f' && f.raw && !isLowest(f); }
+function resolved(n){ return n && n.t==='f' && !needSimp(n); }
+function F(n,d=1,raw=false){ if(d<0){n=-n;d=-d;} return {t:'f',n,d,raw}; }
+function ipow(b,e){let r=1;for(let i=0;i<e;i++){r*=b;if(!Number.isSafeInteger(r))throw new Error('El resultado es demasiado grande para calcularlo con exactitud.');}return r;}
 
 function tokenize(s){
   s=s.replace(/[\[{]/g,'(').replace(/[\]}]/g,')').replace(/[×x·]/g,'*').replace(/[−–]/g,'-').replace(/[÷:]/g,'/');
@@ -211,107 +247,188 @@ function tokenize(s){
     {t:'ws',  re:/^(\s+)/}
   ];
   const out=[];let r=s;
-  while(r.length){
-    let matched=false;
-    for(const d of defs){
-      const x=r.match(d.re);
-      if(x){
-        if(d.t==='frac')out.push({type:'frac',n:parseInt(x[1],10),d:parseInt(x[2],10)});
-        else if(d.t==='num')out.push({type:'num',v:parseInt(x[1],10)});
-        else if(d.t==='op')out.push({type:'op',v:x[1]});
-        else if(d.t==='lpar')out.push({type:'lpar'});
-        else if(d.t==='rpar')out.push({type:'rpar'});
-        r=r.slice(x[0].length);matched=true;break;
-      }
-    }
-    if(!matched)throw new Error(`Carácter no válido: '${r[0]}'.`);
+  while(r.length){let m=false;
+    for(const d of defs){const x=r.match(d.re);if(x){
+      if(d.t==='frac')out.push({type:'frac',n:+x[1],d:+x[2]});
+      else if(d.t==='num')out.push({type:'num',v:+x[1]});
+      else if(d.t==='op')out.push({type:'op',v:x[1]});
+      else if(d.t==='lpar')out.push({type:'lpar'});
+      else if(d.t==='rpar')out.push({type:'rpar'});
+      r=r.slice(x[0].length);m=true;break;}}
+    if(!m)throw new Error("Carácter no válido: '"+r[0]+"'.");
   }
   return out;
 }
-const OPS={'+':2,'-':2,'*':3,'/':3,'^':4};
-const RIGHT={'^':true}; // la potencia es asociativa por la derecha
-function toRPN(ts){
-  const out=[],st=[];
-  for(const t of ts){
-    if(t.type==='num'||t.type==='frac')out.push(t);
-    else if(t.type==='op'){
-      while(st.length&&st[st.length-1].type==='op'&&
-            (RIGHT[t.v]?OPS[t.v]<OPS[st[st.length-1].v]:OPS[t.v]<=OPS[st[st.length-1].v]))
-        out.push(st.pop());
-      st.push(t);
+function parse(tokens){
+  let i=0; const peek=()=>tokens[i], next=()=>tokens[i++];
+  function atom(){
+    const t=peek(); if(!t)throw new Error('Falta un número: revisa la operación.');
+    if(t.type==='lpar'){next();const e=sum();const c=peek();if(!c||c.type!=='rpar')throw new Error('Hay paréntesis sin cerrar.');next();return {t:'par',inner:e};}
+    if(t.type==='frac'){next();if(t.d===0)throw new Error('El denominador no puede ser 0.');return F(t.n,t.d);}
+    if(t.type==='num'){next();return F(t.v,1);}
+    throw new Error('Se esperaba un número.');
+  }
+  function pow(){
+    let b=atom();
+    while(peek()&&peek().type==='op'&&peek().v==='^'){next();const e=peek();
+      if(!e||(e.type!=='num'&&!(e.type==='frac'&&e.d===1)))throw new Error('El exponente debe ser un número entero.');
+      next();const ev=(e.type==='num')?e.v:e.n; b={t:'pow',base:b,e:ev};}
+    return b;
+  }
+  function mul(){
+    let items=[{op:'*',node:pow()}];
+    while(peek()&&peek().type==='op'&&(peek().v==='*'||peek().v==='/')){const op=next().v;items.push({op,node:pow()});}
+    return items.length===1?items[0].node:{t:'mul',items};
+  }
+  function sum(){
+    let items=[]; let s='+';
+    if(peek()&&peek().type==='op'&&(peek().v==='+'||peek().v==='-')){s=next().v;}
+    items.push({op:s,node:mul()});
+    while(peek()&&peek().type==='op'&&(peek().v==='+'||peek().v==='-')){const op=next().v;items.push({op,node:mul()});}
+    return (items.length===1&&items[0].op==='+')?items[0].node:{t:'sum',items};
+  }
+  const r=sum();
+  if(i<tokens.length)throw new Error('La operación no está completa.');
+  return r;
+}
+
+/* ---- render a HTML (fracciones apiladas, estilo pizarra) ---- */
+function frHTML(f){
+  if(f.d===1)return `<span class="int">${f.n}</span>`;
+  const neg=f.n<0, an=Math.abs(f.n);
+  return `${neg?'<span class="neg">−</span>':''}<span class="fr"><span class="n">${an}</span><span class="b"></span><span class="d">${f.d}</span></span>`;
+}
+/* profundidad de anidamiento de paréntesis (para elegir el delimitador) */
+function parRank(node){
+  if(!node)return 0;
+  switch(node.t){
+    case 'f':return 0;
+    case 'par':return 1+parRank(node.inner);
+    case 'pow':return parRank(node.base);
+    case 'mul':
+    case 'sum':return node.items.reduce((m,it)=>Math.max(m,parRank(it.node)),0);
+  }
+  return 0;
+}
+const DELIMS=[['(',')'],['[',']'],['{','}']];
+function delimFor(depth){return DELIMS[(depth-1)%3];}
+function rHTML(node){
+  if(node.t==='f')return frHTML(node);
+  if(node.t==='par'){const[o,c]=delimFor(parRank(node));
+    return `<span class="par">${o}</span>`+rHTML(node.inner)+`<span class="par">${c}</span>`;}
+  if(node.t==='pow'){let b=rHTML(node.base);
+    if(node.base.t==='f'&&(node.base.d!==1||node.base.n<0))b='<span class="par">(</span>'+b+'<span class="par">)</span>';
+    return b+'<sup class="exp">'+node.e+'</sup>';}
+  if(node.t==='mul')return node.items.map((it,k)=>(k===0?'':`<span class="op">${it.op==='*'?'·':':'}</span>`)+rHTML(it.node)).join('');
+  if(node.t==='sum')return node.items.map((it,k)=>{
+    if(k===0)return (it.op==='-'?'<span class="lead">−</span>':'')+rHTML(it.node);
+    return `<span class="op">${it.op==='+'?'+':'−'}</span>`+rHTML(it.node);
+  }).join('');
+  return '';
+}
+
+/* ---- motor de reducción por pasadas ---- */
+function hasPow(n){if(n.t==='pow')return true;if(n.t==='mul'||n.t==='sum')return n.items.some(it=>hasPow(it.node));return false;}
+function hasMul(n){if(n.t==='mul'&&n.items.length>=2)return true;if(n.t==='mul'||n.t==='sum')return n.items.some(it=>hasMul(it.node));return false;}
+function rawBad(n){if(n.t==='f')return needSimp(n);if(n.t==='par')return rawBad(n.inner);if(n.t==='pow')return rawBad(n.base);if(n.t==='mul'||n.t==='sum')return n.items.some(it=>rawBad(it.node));return false;}
+function collectParens(n,acc){
+  if(n.t==='par'){const before=acc.length;collectParens(n.inner,acc);if(acc.length===before&&!resolved(n.inner))acc.push(n);return;}
+  if(n.t==='pow'){collectParens(n.base,acc);return;}
+  if(n.t==='mul'||n.t==='sum'){n.items.forEach(it=>collectParens(it.node,acc));return;}
+}
+function anyParenWork(n){const a=[];collectParens(n,a);return a.length>0;}
+
+let mcmNote=null;
+function advanceOne(node){
+  if(rawBad(node))return {node:simplifyAll(node),changed:true};
+  if(hasPow(node))return {node:powAll(node),changed:true};
+  if(hasMul(node))return {node:mulStep(node),changed:true};
+  if(node.t==='sum'&&node.items.length>=2)return {node:sumStep(node),changed:true};
+  return {node,changed:false};
+}
+function simplifyAll(n){
+  if(n.t==='f'){
+    if(needSimp(n)){const g=gcd(n.n,n.d);let nn=n.n/g,dd=n.d/g;if(dd<0){nn=-nn;dd=-dd;}return {t:'f',n:nn,d:dd,raw:false};}
+    if(n.raw&&isLowest(n))n.raw=false;return n;
+  }
+  if(n.t==='par'){n.inner=simplifyAll(n.inner);return n;}
+  if(n.t==='pow'){n.base=simplifyAll(n.base);return n;}
+  if(n.t==='mul'||n.t==='sum'){n.items.forEach(it=>it.node=simplifyAll(it.node));return n;}
+  return n;
+}
+function powAll(n){
+  if(n.t==='pow'){
+    let bf=n.base.t==='par'?n.base.inner:n.base;
+    if(bf.t!=='f'){n.base=powAll(n.base);return n;}
+    const e=n.e; if(e===0){if(bf.n===0)throw new Error('La operación 0^0 no está definida.');return F(1,1,false);}
+    const k=Math.abs(e); const nn=ipow(bf.n,k),dd=ipow(bf.d,k);
+    return e<0?F(dd,nn,true):F(nn,dd,true);
+  }
+  if(n.t==='par'){n.inner=powAll(n.inner);return n;}
+  if(n.t==='mul'||n.t==='sum'){n.items.forEach(it=>it.node=powAll(it.node));return n;}
+  return n;
+}
+function mulStep(n){
+  if(n.t==='mul'&&n.items.length>=2){
+    const a=n.items[0].node,b=n.items[1].node;
+    if(a.t==='f'&&b.t==='f'){
+      let nn,dd;
+      if(n.items[1].op==='*'){nn=a.n*b.n;dd=a.d*b.d;}
+      else{if(b.n===0)throw new Error('No se puede dividir entre 0.');nn=a.n*b.d;dd=a.d*b.n;}
+      n.items=[{op:n.items[0].op,node:F(nn,dd,true)},...n.items.slice(2)];
+      return n.items.length===1?n.items[0].node:n;
     }
-    else if(t.type==='lpar')st.push(t);
-    else if(t.type==='rpar'){while(st.length&&st[st.length-1].type!=='lpar')out.push(st.pop());if(!st.length)throw new Error('Hay paréntesis sin cerrar.');st.pop();}
+    n.items.forEach(it=>it.node=mulStep(it.node));return n;
   }
-  while(st.length){const x=st.pop();if(x.type==='lpar')throw new Error('Hay paréntesis sin cerrar.');out.push(x);}
-  return out;
+  if(n.t==='mul'||n.t==='sum'){n.items.forEach(it=>it.node=mulStep(it.node));return n;}
+  return n;
 }
-function addSub(a,b,steps,sub){
-  const m=lcm(a.d,b.d);const na=a.n*(m/a.d);const nb=b.n*(m/b.d);
-  const rn=sub?na-nb:na+nb;const res=normalize(rn,m);
-  const sign=sub?'−':'+';
-  const lines=[`${fmt(a)} ${sign} ${fmt(b)}`];
-  if(a.d!==b.d){lines.push(`m.c.m.(${a.d}, ${b.d}) = ${m}`);lines.push(`= ${na}/${m} ${sign} ${nb}/${m}`);}
-  const raw=rawFmt(rn,m);lines.push(`= ${raw}`+(raw!==fmt(res)?` = ${fmt(res)}`:''));
-  steps.push({label:sub?'Resta':'Suma',lines});return res;
-}
-function mul(a,b,steps){
-  const rn=a.n*b.n,rd=a.d*b.d,res=normalize(rn,rd),raw=rawFmt(rn,rd);
-  steps.push({label:'Producto',lines:[`${fmt(a)} × ${fmt(b)}`,`= ${raw}`+(raw!==fmt(res)?` = ${fmt(res)}`:'')]});
-  return res;
-}
-function div(a,b,steps){
-  if(b.n===0)throw new Error('No se puede dividir entre 0.');
-  const rn=a.n*b.d,rd=a.d*b.n,res=normalize(rn,rd),raw=rawFmt(rn,rd);
-  steps.push({label:'Cociente',lines:[`${fmt(a)} ÷ ${fmt(b)}`,`= ${fmt(a)} × ${b.d}/${b.n}`,`= ${raw}`+(raw!==fmt(res)?` = ${fmt(res)}`:'')]});
-  return res;
-}
-function pow(a,b,steps){
-  if(b.d!==1)throw new Error('El exponente debe ser un número entero.');
-  const e=b.n;
-  if(e===0){
-    if(a.n===0)throw new Error('La operación 0⁰ no está definida.');
-    steps.push({label:'Potencia',lines:[`(${fmt(a)})^0`,'= 1']});
-    return normalize(1,1);
+function sumStep(n){
+  if(!(n.t==='sum'&&n.items.length>=2)){if(n.t==='mul'||n.t==='sum')n.items.forEach(it=>it.node=sumStep(it.node));return n;}
+  const fr=n.items.map(it=>it.node);
+  if(!fr.every(x=>x.t==='f')){n.items.forEach(it=>it.node=sumStep(it.node));return n;}
+  const dens=fr.map(x=>x.d), allEq=dens.every(d=>d===dens[0]);
+  if(!allEq){
+    const m=dens.reduce((a,b)=>lcm(a,b));
+    n.items.forEach(it=>{const f=it.node;it.node=F(f.n*(m/f.d),m,false);});
+    mcmNote='m.c.m.('+[...new Set(dens)].join(', ')+') = '+m;
+    return n;
   }
-  const lines=[`(${fmt(a)})^${e}`];
-  let base=a;const k=Math.abs(e);
-  if(e<0){
-    if(a.n===0)throw new Error('No se puede elevar 0 a un exponente negativo.');
-    base=normalize(a.d,a.n); // recíproco
-    lines.push(`= (${fmt(base)})^${k}   (invertimos la fracción)`);
-  }
-  const rn=ipow(base.n,k),rd=ipow(base.d,k),res=normalize(rn,rd);
-  if(base.d===1){
-    lines.push(`= ${powTerm(base.n,k)} = ${fmt(res)}`);
+  const D=dens[0]; let num=0;
+  n.items.forEach(it=>{num+=(it.op==='-'?-1:1)*it.node.n;});
+  return F(num,D,true);
+}
+function cleanup(n,isPowBase=false){
+  if(n.t==='par'){n.inner=cleanup(n.inner,false);if(resolved(n.inner)&&!isPowBase)return n.inner;return n;}
+  if(n.t==='pow'){n.base=cleanup(n.base,true);return n;}
+  if(n.t==='mul'){n.items.forEach(it=>it.node=cleanup(it.node,false));return n.items.length===1?n.items[0].node:n;}
+  if(n.t==='sum'){n.items.forEach(it=>it.node=cleanup(it.node,false));return (n.items.length===1&&n.items[0].op==='+')?n.items[0].node:n;}
+  return n;
+}
+function step(tree){
+  mcmNote=null; let changed=false;
+  if(anyParenWork(tree)){
+    const ps=[];collectParens(tree,ps);
+    ps.forEach(p=>{const r=advanceOne(p.inner);p.inner=r.node;changed=changed||r.changed;});
   }else{
-    lines.push(`= ${powTerm(base.n,k)} / ${powTerm(base.d,k)}`);
-    const raw=rawFmt(rn,rd);
-    lines.push(`= ${raw}`+(raw!==fmt(res)?` = ${fmt(res)}`:''));
+    const r=advanceOne(tree);tree=r.node;changed=r.changed;
   }
-  steps.push({label:'Potencia',lines});
-  return res;
+  tree=cleanup(tree);
+  return {tree,changed,note:mcmNote};
 }
-function evalRPN(rpn,steps){
-  const st=[];
-  for(const t of rpn){
-    if(t.type==='num')st.push(normalize(t.v,1));
-    else if(t.type==='frac')st.push(normalize(t.n,t.d));
-    else if(t.type==='op'){
-      if(st.length<2)throw new Error('Falta algún número: revisa la operación.');
-      const b=st.pop(),a=st.pop();
-      let r;
-      if(t.v==='+')r=addSub(a,b,steps,false);
-      else if(t.v==='-')r=addSub(a,b,steps,true);
-      else if(t.v==='*')r=mul(a,b,steps);
-      else if(t.v==='/')r=div(a,b,steps);
-      else r=pow(a,b,steps);
-      st.push(r);
-    }
+function solve(expr){
+  let tree=cleanup(parse(tokenize(expr)));
+  const lines=[{html:rHTML(tree),note:null}];
+  let guard=0;
+  while(guard++<800){
+    const r=step(tree); if(!r.changed)break; tree=r.tree;
+    const h=rHTML(tree);
+    if(h===lines[lines.length-1].html && !r.note) continue;
+    lines.push({html:h,note:r.note});
   }
-  if(st.length!==1)throw new Error('La operación no está completa.');
-  return st[0];
+  return {lines,final:tree};
 }
+
 function mixed(f){
   if(f.d===1||Math.abs(f.n)<f.d)return null;
   return{whole:Math.trunc(f.n/f.d),n:Math.abs(f.n)%f.d,d:f.d};
@@ -596,7 +713,7 @@ function buildExpression(){
   }
   return parts.join(' ');
 }
-function displayExpr(e){return e.replace(/ \* /g,' × ').replace(/ \/ /g,' ÷ ').replace(/ - /g,' − ');}
+function displayExpr(e){return e.replace(/ \* /g,' · ').replace(/ \/ /g,' : ').replace(/ - /g,' − ');}
 
 function fracBig(n,d){
   if(d===1)return `<span class="big-int">${n}</span>`;
@@ -624,21 +741,28 @@ function renderResult(res){
   resultEl.innerHTML=html;
   document.getElementById('copyBtn').addEventListener('click',()=>copyResult(res));
 }
-function renderSteps(expr,steps){
-  let html=`<div class="step"><div class="s-label">Operación</div><div class="s-body mono">${escapeHtml(displayExpr(expr))}</div></div>`;
-  if(steps.length===0)html+=`<div class="step"><div class="s-body muted">No hay operaciones que realizar.</div></div>`;
-  steps.forEach(st=>{html+=`<div class="step"><div class="s-label">${escapeHtml(st.label)}</div><div class="s-body mono">${st.lines.map(escapeHtml).join('<br>')}</div></div>`;});
+function renderDeriv(lines){
+  let html='<div class="deriv">';
+  lines.forEach((l,k)=>{
+    const last=k===lines.length-1 && lines.length>1;
+    if(k>0) html+=' <span class="eq">=</span> ';
+    html+=`<span class="step">`+
+          `<span class="expr${last?' final':''}">${l.html}</span>`+
+          (l.note?`<span class="note">${escapeHtml(l.note)}</span>`:'')+
+          `</span>`;
+  });
+  html+='</div>';
   stepsEl.innerHTML=html;stepsEl.scrollTop=0;
 }
 function showError(expr,msg){
-  stepsEl.innerHTML=`<div class="step"><div class="s-label">Operación</div><div class="s-body mono">${escapeHtml(displayExpr(expr))}</div></div>`;
+  stepsEl.innerHTML=`<div class="deriv"><span class="expr mono">${escapeHtml(displayExpr(expr))}</span></div>`;
   resultEl.innerHTML=`<div class="result-error">${escapeHtml(msg)}</div>`;
   announce('Error: '+msg);
 }
 function clearAll(){
   editor.innerHTML='';selected=null;
   resultEl.innerHTML='<div class="result-placeholder">—</div>';
-  stepsEl.innerHTML='<div class="step"><div class="s-body muted">Construye una operación y pulsa Resolver.</div></div>';
+  stepsEl.innerHTML='<div class="deriv"><span class="expr muted">Construye una operación y pulsa Resolver.</span></div>';
   textOut.classList.remove('show');
   editor.focus();announce('Editor limpiado.');
 }
@@ -646,21 +770,15 @@ function compute(){
   const expr=buildExpression();
   if(!expr.trim()){
     resultEl.innerHTML='<div class="result-placeholder">—</div>';
-    stepsEl.innerHTML='<div class="step"><div class="s-body muted">Construye una operación con los botones de arriba.</div></div>';
+    stepsEl.innerHTML='<div class="deriv"><span class="expr muted">Construye una operación con los botones de arriba.</span></div>';
     return;
   }
-  const steps=[];let res;
-  try{
-    const rpn=toRPN(tokenize(expr));
-    if(rpn.length===1&&rpn[0].type==='frac'){
-      const r0=rpn[0],ns=normalize(r0.n,r0.d);
-      if(`${r0.n}/${r0.d}`!==fmt(ns))steps.push({label:'Simplificación',lines:[`${r0.n}/${r0.d} = ${fmt(ns)}`]});
-    }
-    res=evalRPN(rpn,steps);
-  }catch(err){showError(expr,err.message||String(err));return;}
-  renderSteps(expr,steps);
-  renderResult(res);
-  announce('Resultado: '+fmt(res));
+  let out;
+  try{ out=solve(expr); }
+  catch(err){ showError(expr,err.message||String(err)); return; }
+  renderDeriv(out.lines);
+  renderResult(out.final);
+  announce('Resultado: '+fmt(out.final));
 }
 function copyResult(res){
   const m=mixed(res),dc=decimal(res);
